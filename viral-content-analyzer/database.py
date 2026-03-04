@@ -166,6 +166,17 @@ class Database:
                 session.refresh(content)
                 return content, True
 
+    @staticmethod
+    def _to_text(value) -> str | None:
+        """Converte listas/dicts para string antes de salvar no banco."""
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return "\n".join(f"- {item}" for item in value if item)
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
+
     def save_analysis(self, content_id: int, platform: str, platform_id: str, analysis: dict):
         """Persiste a análise de IA de um conteúdo."""
         with self.session() as session:
@@ -181,14 +192,14 @@ class Database:
                 score_format=analysis.get("scores", {}).get("format"),
                 score_cta=analysis.get("scores", {}).get("cta"),
                 score_trending=analysis.get("scores", {}).get("trending"),
-                viral_reason=analysis.get("viral_reason"),
-                hook_analysis=analysis.get("hook_analysis"),
-                copy_analysis=analysis.get("copy_analysis"),
-                format_analysis=analysis.get("format_analysis"),
-                script_structure=analysis.get("script_structure"),
-                recommendations=analysis.get("recommendations"),
-                warnings=analysis.get("warnings"),
-                summary=analysis.get("summary"),
+                viral_reason=self._to_text(analysis.get("viral_reason")),
+                hook_analysis=self._to_text(analysis.get("hook_analysis")),
+                copy_analysis=self._to_text(analysis.get("copy_analysis")),
+                format_analysis=self._to_text(analysis.get("format_analysis")),
+                script_structure=self._to_text(analysis.get("script_structure")),
+                recommendations=self._to_text(analysis.get("recommendations")),
+                warnings=self._to_text(analysis.get("warnings")),
+                summary=self._to_text(analysis.get("summary")),
                 raw_analysis=analysis,
             )
             session.add(obj)
