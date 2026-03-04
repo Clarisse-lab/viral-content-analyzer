@@ -89,7 +89,7 @@ def run_pipeline(platform_filter: str | None = None):
     console.print(f"Conteúdos para analisar: {len(unanalyzed)}")
 
     if unanalyzed:
-        if not config.ANTHROPIC_API_KEY:
+        if not config.ANTHROPIC_API_KEY and not config.OPENAI_API_KEY:
             console.print("[yellow]⚠ ANTHROPIC_API_KEY não configurada. Pulando análise de IA.[/yellow]")
         else:
             for content in track(unanalyzed, description="Analisando com IA..."):

@@ -1,6 +1,8 @@
 """
-Analisador de IA - usa Claude para entender POR QUE um conteúdo viralizou.
+Analisador de IA - usa Claude ou GPT para entender POR QUE um conteúdo viralizou.
 Analisa: copy, roteiro, formato, legenda, hook, CTA, tendências.
+
+Prioridade: OpenAI (se OPENAI_API_KEY configurada) → Anthropic (se ANTHROPIC_API_KEY configurada)
 """
 
 import json
@@ -64,40 +66,67 @@ Responda EXATAMENTE no seguinte formato JSON (sem texto antes ou depois):
 
 class ContentAnalyzer:
     def __init__(self):
-        if not config.ANTHROPIC_API_KEY:
-            raise ValueError("ANTHROPIC_API_KEY não configurada no .env")
-        self.client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        if config.OPENAI_API_KEY:
+            import openai
+            self.client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
+            self.provider = "openai"
+            self.model = config.OPENAI_MODEL
+        elif config.ANTHROPIC_API_KEY:
+            self.client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+            self.provider = "anthropic"
+            self.model = "claude-sonnet-4-6"
+        else:
+            raise ValueError("Configure OPENAI_API_KEY ou ANTHROPIC_API_KEY no .env")
 
     def analyze(self, content: Content) -> dict:
         """Analisa um conteúdo e retorna o resultado estruturado."""
         prompt = self._build_prompt(content)
 
         try:
-            message = self.client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw_text = message.content[0].text.strip()
-
-            # Extrai JSON mesmo se vier com markdown
-            if "```json" in raw_text:
-                raw_text = raw_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw_text:
-                raw_text = raw_text.split("```")[1].split("```")[0].strip()
-
-            analysis = json.loads(raw_text)
-            analysis["model"] = message.model
-            analysis["input_tokens"] = message.usage.input_tokens
-            analysis["output_tokens"] = message.usage.output_tokens
-            return analysis
-
-        except json.JSONDecodeError as e:
-            print(f"[Analyzer] Erro ao parsear JSON da IA: {e}")
-            return self._fallback_analysis(raw_text)
+            if self.provider == "openai":
+                return self._analyze_openai(prompt)
+            else:
+                return self._analyze_anthropic(prompt)
         except Exception as e:
             print(f"[Analyzer] Erro na análise: {e}")
             return {}
+
+    def _analyze_anthropic(self, prompt: str) -> dict:
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = message.content[0].text.strip()
+        analysis = self._parse_json(raw_text)
+        analysis["model"] = message.model
+        analysis["input_tokens"] = message.usage.input_tokens
+        analysis["output_tokens"] = message.usage.output_tokens
+        return analysis
+
+    def _analyze_openai(self, prompt: str) -> dict:
+        response = self.client.chat.completions.create(
+            model=self.model,
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = response.choices[0].message.content.strip()
+        analysis = self._parse_json(raw_text)
+        analysis["model"] = response.model
+        analysis["input_tokens"] = response.usage.prompt_tokens
+        analysis["output_tokens"] = response.usage.completion_tokens
+        return analysis
+
+    def _parse_json(self, raw_text: str) -> dict:
+        if "```json" in raw_text:
+            raw_text = raw_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw_text:
+            raw_text = raw_text.split("```")[1].split("```")[0].strip()
+        try:
+            return json.loads(raw_text)
+        except json.JSONDecodeError as e:
+            print(f"[Analyzer] Erro ao parsear JSON da IA: {e}")
+            return self._fallback_analysis(raw_text)
 
     def _build_prompt(self, content: Content) -> str:
         duration = "N/A"
