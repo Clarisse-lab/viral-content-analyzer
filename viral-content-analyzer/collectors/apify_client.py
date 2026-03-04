@@ -13,7 +13,7 @@ def run_actor(actor_id: str, input_data: dict, timeout: int = 300) -> list[dict]
     Usa o endpoint run-sync-get-dataset-items que bloqueia até o ator terminar
     e já retorna os dados — sem precisar fazer polling separado.
     """
-    url = f"{APIFY_BASE}/acts/{actor_id}/run-sync-get-dataset-items"
+    url = f"{APIFY_BASE}/acts/{actor_id.replace('/', '~')}/run-sync-get-dataset-items"
     resp = requests.post(
         url,
         params={"token": config.APIFY_API_TOKEN, "timeout": timeout},
