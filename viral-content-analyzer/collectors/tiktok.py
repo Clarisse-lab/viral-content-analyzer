@@ -83,12 +83,23 @@ class TikTokCollector:
     def _collect_apify(self, keyword: str, lookback_days: int) -> list[dict]:
         """Coleta vídeos via Apify clockworks/tiktok-scraper."""
         from collectors.apify_client import run_actor
+        hashtag = keyword.replace(" ", "").lstrip("#")
+        # searchDatePosted: "0"=all time, "1"=last 24h, "7"=last week, "30"=last month
+        date_posted = "1" if lookback_days <= 1 else "7" if lookback_days <= 7 else "30"
         items = run_actor("clockworks/tiktok-scraper", {
-            "searchQueries": [keyword],
-            "searchSection": "/search/video?q=",
-            "maxItems": 30,
-            "dateRange": f"last_{lookback_days}_days",
-            "proxy": {"useApifyProxy": True},
+            "hashtags": [hashtag],
+            "resultsPerPage": 30,
+            "searchSection": "",
+            "searchSorting": "0",
+            "searchDatePosted": date_posted,
+            "scrapeRelatedVideos": False,
+            "shouldDownloadVideos": False,
+            "shouldDownloadCovers": False,
+            "shouldDownloadSlideshowImages": False,
+            "shouldDownloadAvatars": False,
+            "shouldDownloadMusicCovers": False,
+            "commentsPerPost": 0,
+            "proxyCountryCode": "None",
         })
         return [self._parse_apify_video(item, keyword) for item in items if item]
 

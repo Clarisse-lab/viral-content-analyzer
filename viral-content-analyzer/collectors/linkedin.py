@@ -77,19 +77,52 @@ class LinkedInCollector:
     def _collect_apify(self, keywords: list[str], lookback_days: int) -> list[dict]:
         """Coleta posts públicos via Apify curious_coder/linkedin-post-search-scraper."""
         from collectors.apify_client import run_actor
-        results = []
+        import urllib.parse
+
+        # Mapeia lookback_days para o filtro de data do LinkedIn
+        if lookback_days <= 1:
+            date_filter = "past-24h"
+        elif lookback_days <= 7:
+            date_filter = "past-week"
+        else:
+            date_filter = "past-month"
+
+        # Monta URLs de busca do LinkedIn para cada keyword
+        search_urls = []
         for keyword in keywords:
-            try:
-                items = run_actor("curious_coder/linkedin-post-search-scraper", {
-                    "keyword": keyword,
-                    "maxPosts": 25,
-                })
-                for item in items:
-                    parsed = self._parse_apify_post(item, keyword)
-                    if parsed:
-                        results.append(parsed)
-            except Exception as e:
-                print(f"[LinkedIn/Apify] Erro na keyword '{keyword}': {e}")
+            encoded = urllib.parse.quote(keyword)
+            url = (
+                f"https://www.linkedin.com/search/results/content/"
+                f"?datePosted=%22{date_filter}%22&keywords={encoded}&origin=FACETED_SEARCH"
+            )
+            search_urls.append(url)
+
+        results = []
+        try:
+            items = run_actor("curious_coder/linkedin-post-search-scraper", {
+                "urls": search_urls,
+                "deepScrape": False,
+                "rawData": False,
+                "minDelay": 2,
+                "maxDelay": 4,
+                "proxy": {
+                    "useApifyProxy": True,
+                    "apifyProxyCountry": "US",
+                },
+            })
+            for item in items:
+                # Descobre qual keyword originou o post
+                post_url = item.get("url", "") or item.get("postUrl", "")
+                matched_kw = keywords[0]
+                for kw in keywords:
+                    if urllib.parse.quote(kw) in post_url or kw.lower() in (item.get("text", "") or "").lower():
+                        matched_kw = kw
+                        break
+                parsed = self._parse_apify_post(item, matched_kw)
+                if parsed:
+                    results.append(parsed)
+        except Exception as e:
+            print(f"[LinkedIn/Apify] Erro ao coletar posts: {e}")
         return results
 
     def _parse_apify_post(self, item: dict, keyword: str) -> dict | None:
