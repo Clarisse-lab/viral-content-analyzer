@@ -20,36 +20,51 @@ class InstagramCollector:
     PLATFORM = "instagram"
 
     def __init__(self):
-        if not config.INSTAGRAM_ACCESS_TOKEN:
-            raise ValueError("INSTAGRAM_ACCESS_TOKEN não configurada no .env")
+        self.use_apify = bool(config.APIFY_API_TOKEN)
+        if not self.use_apify and not config.INSTAGRAM_ACCESS_TOKEN:
+            raise ValueError("Configure INSTAGRAM_ACCESS_TOKEN ou APIFY_API_TOKEN no .env")
         self.token = config.INSTAGRAM_ACCESS_TOKEN
         self.account_id = config.INSTAGRAM_BUSINESS_ACCOUNT_ID
 
     def collect(self, keywords: list[str], lookback_days: int = 7) -> list[dict]:
         """
         Coleta posts virais via hashtags.
-        NOTA: A API do Instagram limita busca por hashtag a ~30 hashtags únicas por 7 dias.
+        Usa Apify se APIFY_API_TOKEN configurado, senão usa Meta Graph API.
         """
         results = []
         cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
 
-        for keyword in keywords:
-            hashtag = keyword.replace(" ", "").lower()
-            try:
-                hashtag_id = self._get_hashtag_id(hashtag)
-                if not hashtag_id:
-                    continue
-                posts = self._get_top_media(hashtag_id)
-                for post in posts:
-                    parsed = self._parse_post(post, keyword)
-                    if not parsed:
+        if self.use_apify:
+            for keyword in keywords:
+                try:
+                    posts = self._collect_apify(keyword, lookback_days)
+                    for post in posts:
+                        if not post:
+                            continue
+                        if post["published_at"] < cutoff:
+                            continue
+                        if post["likes"] >= config.INSTAGRAM_MIN_LIKES:
+                            results.append(post)
+                except Exception as e:
+                    print(f"[Instagram/Apify] Erro na keyword '{keyword}': {e}")
+        else:
+            for keyword in keywords:
+                hashtag = keyword.replace(" ", "").lower()
+                try:
+                    hashtag_id = self._get_hashtag_id(hashtag)
+                    if not hashtag_id:
                         continue
-                    if parsed["published_at"] < cutoff:
-                        continue
-                    if parsed["likes"] >= config.INSTAGRAM_MIN_LIKES:
-                        results.append(parsed)
-            except Exception as e:
-                print(f"[Instagram] Erro na hashtag #{hashtag}: {e}")
+                    posts = self._get_top_media(hashtag_id)
+                    for post in posts:
+                        parsed = self._parse_post(post, keyword)
+                        if not parsed:
+                            continue
+                        if parsed["published_at"] < cutoff:
+                            continue
+                        if parsed["likes"] >= config.INSTAGRAM_MIN_LIKES:
+                            results.append(parsed)
+                except Exception as e:
+                    print(f"[Instagram] Erro na hashtag #{hashtag}: {e}")
 
         seen = set()
         unique = []
@@ -59,6 +74,56 @@ class InstagramCollector:
                 unique.append(r)
 
         return sorted(unique, key=lambda x: x["likes"], reverse=True)
+
+    # ─── Apify Scraper ────────────────────────────────────────────────────────
+
+    def _collect_apify(self, keyword: str, lookback_days: int) -> list[dict]:
+        """Coleta posts via Apify apify/instagram-hashtag-scraper."""
+        from collectors.apify_client import run_actor
+        hashtag = keyword.replace(" ", "").lower()
+        items = run_actor("apify/instagram-hashtag-scraper", {
+            "hashtags": [hashtag],
+            "resultsLimit": 30,
+            "proxy": {"useApifyProxy": True},
+        })
+        return [self._parse_apify_post(item, keyword) for item in items if item]
+
+    def _parse_apify_post(self, item: dict, keyword: str) -> dict | None:
+        try:
+            timestamp = item.get("timestamp", "")
+            if timestamp:
+                published_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            else:
+                published_at = datetime.now(timezone.utc)
+            likes = int(item.get("likesCount", 0))
+            comments = int(item.get("commentsCount", 0))
+            caption = item.get("caption", "") or ""
+            return {
+                "platform": self.PLATFORM,
+                "platform_id": str(item.get("id", "")),
+                "url": item.get("url", ""),
+                "title": "",
+                "description": caption[:2000],
+                "channel": item.get("ownerUsername", ""),
+                "keyword": keyword,
+                "published_at": published_at,
+                "views": int(item.get("videoViewCount", 0) or 0),
+                "likes": likes,
+                "comments": comments,
+                "shares": None,
+                "saves": None,
+                "duration_seconds": int(item.get("videoDuration", 0)) or None,
+                "thumbnail_url": item.get("displayUrl"),
+                "tags": [h.lstrip("#") for h in item.get("hashtags", [])],
+                "category_id": item.get("type"),
+                "engagement_rate": self._calc_engagement(likes, comments, max(likes * 10, 1)),
+                "raw_data": item,
+            }
+        except Exception as e:
+            print(f"[Instagram/Apify] Erro ao parsear post: {e}")
+            return None
+
+    # ─── Meta Graph API (Oficial) ─────────────────────────────────────────────
 
     def _get_hashtag_id(self, hashtag: str) -> str | None:
         """Obtém o ID interno do Instagram para uma hashtag."""

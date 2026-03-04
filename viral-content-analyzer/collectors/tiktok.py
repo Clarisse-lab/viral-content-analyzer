@@ -27,16 +27,26 @@ class TikTokCollector:
     def __init__(self):
         self.client_key = config.TIKTOK_CLIENT_KEY
         self.client_secret = config.TIKTOK_CLIENT_SECRET
+        self.use_apify = bool(config.APIFY_API_TOKEN)
         self._access_token = None
         self._token_expires_at = 0
 
     def collect(self, keywords: list[str], lookback_days: int = 7) -> list[dict]:
         """Busca vídeos virais no TikTok."""
         results = []
-        cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
 
-        if self.client_key and self.client_secret:
-            # Usa Research API oficial
+        if self.use_apify:
+            # Apify: scraper sem necessidade de aprovação
+            for keyword in keywords:
+                try:
+                    videos = self._collect_apify(keyword, lookback_days)
+                    for v in videos:
+                        if v and v["views"] >= config.TIKTOK_MIN_VIEWS:
+                            results.append(v)
+                except Exception as e:
+                    print(f"[TikTok/Apify] Erro '{keyword}': {e}")
+        elif self.client_key and self.client_secret:
+            # Research API oficial
             for keyword in keywords:
                 try:
                     videos = self._search_research_api(keyword, lookback_days)
@@ -67,6 +77,60 @@ class TikTokCollector:
                 unique.append(r)
 
         return sorted(unique, key=lambda x: x["views"], reverse=True)
+
+    # ─── Apify Scraper ────────────────────────────────────────────────────────
+
+    def _collect_apify(self, keyword: str, lookback_days: int) -> list[dict]:
+        """Coleta vídeos via Apify clockworks/tiktok-scraper."""
+        from collectors.apify_client import run_actor
+        items = run_actor("clockworks/tiktok-scraper", {
+            "searchQueries": [keyword],
+            "searchSection": "/search/video?q=",
+            "maxItems": 30,
+            "dateRange": f"last_{lookback_days}_days",
+            "proxy": {"useApifyProxy": True},
+        })
+        return [self._parse_apify_video(item, keyword) for item in items if item]
+
+    def _parse_apify_video(self, item: dict, keyword: str) -> dict | None:
+        try:
+            video_id = item.get("id", "")
+            author = item.get("authorMeta", {}).get("name", "")
+            create_time = item.get("createTimeISO") or item.get("createTime", "")
+            if create_time:
+                published_at = datetime.fromisoformat(str(create_time).replace("Z", "+00:00"))
+            else:
+                published_at = datetime.now(timezone.utc)
+            views = int(item.get("playCount", 0))
+            likes = int(item.get("diggCount", 0))
+            comments = int(item.get("commentCount", 0))
+            shares = int(item.get("shareCount", 0))
+            tags = [h.get("name", "") for h in item.get("hashtags", [])]
+            duration = item.get("videoMeta", {}).get("duration")
+            return {
+                "platform": self.PLATFORM,
+                "platform_id": str(video_id),
+                "url": f"https://www.tiktok.com/@{author}/video/{video_id}",
+                "title": item.get("text", "")[:200],
+                "description": item.get("text", "")[:2000],
+                "channel": author,
+                "keyword": keyword,
+                "published_at": published_at,
+                "views": views,
+                "likes": likes,
+                "comments": comments,
+                "shares": shares,
+                "saves": None,
+                "duration_seconds": int(duration) if duration else None,
+                "thumbnail_url": item.get("videoMeta", {}).get("coverUrl"),
+                "tags": tags,
+                "category_id": None,
+                "engagement_rate": round((likes + comments + shares) / views * 100, 2) if views > 0 else 0.0,
+                "raw_data": item,
+            }
+        except Exception as e:
+            print(f"[TikTok/Apify] Erro ao parsear vídeo: {e}")
+            return None
 
     # ─── Research API (Oficial) ───────────────────────────────────────────────
 

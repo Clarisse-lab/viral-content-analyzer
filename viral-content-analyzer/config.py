@@ -17,6 +17,9 @@ TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "")
 LINKEDIN_ACCESS_TOKEN = os.getenv("LINKEDIN_ACCESS_TOKEN", "")
 LINKEDIN_ORGANIZATION_ID = os.getenv("LINKEDIN_ORGANIZATION_ID", "")
 
+# Apify (scraper alternativo para TikTok, Instagram, LinkedIn)
+APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "")
+
 # Search config
 KEYWORDS = [k.strip() for k in os.getenv("KEYWORDS", "marketing digital,empreendedorismo").split(",")]
 LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "7"))

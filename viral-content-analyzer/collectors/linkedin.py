@@ -30,6 +30,7 @@ class LinkedInCollector:
     PLATFORM = "linkedin"
 
     def __init__(self):
+        self.use_apify = bool(config.APIFY_API_TOKEN)
         self.token = config.LINKEDIN_ACCESS_TOKEN
         self.org_id = config.LINKEDIN_ORGANIZATION_ID
         self.headers = {
@@ -40,28 +41,99 @@ class LinkedInCollector:
 
     def collect(self, keywords: list[str], lookback_days: int = 7) -> list[dict]:
         """
-        Coleta posts da sua organização no LinkedIn.
-        Para monitorar outras páginas, use a LinkedIn Partner API (requer aprovação especial).
+        Coleta posts virais do LinkedIn.
+        Usa Apify (busca pública por keyword) se APIFY_API_TOKEN configurado,
+        senão usa LinkedIn Marketing API (apenas posts da sua organização).
         """
         results = []
 
-        if not self.token or not self.org_id:
-            print("[LinkedIn] AVISO: Credenciais não configuradas. Pulando LinkedIn.")
+        if self.use_apify:
+            try:
+                posts = self._collect_apify(keywords, lookback_days)
+                for post in posts:
+                    if post and post["likes"] >= config.LINKEDIN_MIN_REACTIONS:
+                        results.append(post)
+            except Exception as e:
+                print(f"[LinkedIn/Apify] Erro ao coletar posts: {e}")
+        elif self.token and self.org_id:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+            cutoff_ms = int(cutoff.timestamp() * 1000)
+            try:
+                posts = self._get_org_posts(cutoff_ms)
+                for post in posts:
+                    parsed = self._parse_post(post, keywords)
+                    if parsed and parsed["likes"] >= config.LINKEDIN_MIN_REACTIONS:
+                        results.append(parsed)
+            except Exception as e:
+                print(f"[LinkedIn] Erro ao coletar posts: {e}")
+        else:
+            print("[LinkedIn] AVISO: Sem credenciais. Configure LINKEDIN_ACCESS_TOKEN ou APIFY_API_TOKEN.")
             return []
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-        cutoff_ms = int(cutoff.timestamp() * 1000)
-
-        try:
-            posts = self._get_org_posts(cutoff_ms)
-            for post in posts:
-                parsed = self._parse_post(post, keywords)
-                if parsed and parsed["likes"] >= config.LINKEDIN_MIN_REACTIONS:
-                    results.append(parsed)
-        except Exception as e:
-            print(f"[LinkedIn] Erro ao coletar posts: {e}")
-
         return sorted(results, key=lambda x: x["likes"], reverse=True)
+
+    # ─── Apify Scraper ────────────────────────────────────────────────────────
+
+    def _collect_apify(self, keywords: list[str], lookback_days: int) -> list[dict]:
+        """Coleta posts públicos via Apify curious_coder/linkedin-post-search-scraper."""
+        from collectors.apify_client import run_actor
+        results = []
+        for keyword in keywords:
+            try:
+                items = run_actor("curious_coder/linkedin-post-search-scraper", {
+                    "keyword": keyword,
+                    "maxPosts": 25,
+                })
+                for item in items:
+                    parsed = self._parse_apify_post(item, keyword)
+                    if parsed:
+                        results.append(parsed)
+            except Exception as e:
+                print(f"[LinkedIn/Apify] Erro na keyword '{keyword}': {e}")
+        return results
+
+    def _parse_apify_post(self, item: dict, keyword: str) -> dict | None:
+        try:
+            published_str = item.get("publishedAt", "") or item.get("postedDate", "")
+            try:
+                published_at = datetime.fromisoformat(published_str.replace("Z", "+00:00")) if published_str else datetime.now(timezone.utc)
+            except Exception:
+                published_at = datetime.now(timezone.utc)
+
+            likes = int(item.get("likesCount", 0) or item.get("reactions", 0) or 0)
+            comments = int(item.get("commentsCount", 0) or item.get("comments", 0) or 0)
+            shares = int(item.get("sharesCount", 0) or item.get("shares", 0) or 0)
+            post_url = item.get("url", "") or item.get("postUrl", "")
+            text = item.get("text", "") or item.get("content", "") or item.get("commentary", "")
+            author = item.get("authorName", "") or (item.get("author", {}) or {}).get("name", "")
+            post_id = item.get("id", "") or post_url.split("/")[-1] or str(hash(post_url))
+
+            return {
+                "platform": self.PLATFORM,
+                "platform_id": str(post_id),
+                "url": post_url,
+                "title": "",
+                "description": text[:2000],
+                "channel": author,
+                "keyword": keyword,
+                "published_at": published_at,
+                "views": int(item.get("impressionsCount", 0) or 0),
+                "likes": likes,
+                "comments": comments,
+                "shares": shares,
+                "saves": None,
+                "duration_seconds": None,
+                "thumbnail_url": None,
+                "tags": self._extract_hashtags(text),
+                "category_id": item.get("type"),
+                "engagement_rate": round((likes + comments + shares) / max(likes * 10, 1) * 100, 2),
+                "raw_data": item,
+            }
+        except Exception as e:
+            print(f"[LinkedIn/Apify] Erro ao parsear post: {e}")
+            return None
+
+    # ─── LinkedIn Marketing API (Oficial) ─────────────────────────────────────
 
     def _get_org_posts(self, cutoff_ms: int) -> list[dict]:
         """Busca posts da organização com estatísticas."""

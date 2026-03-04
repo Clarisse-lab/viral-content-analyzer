@@ -30,9 +30,9 @@ def get_enabled_collectors(platform_filter: str | None = None):
 
     platforms = {
         "youtube": (config.YOUTUBE_API_KEY, "collectors.youtube", "YouTubeCollector"),
-        "instagram": (config.INSTAGRAM_ACCESS_TOKEN, "collectors.instagram", "InstagramCollector"),
+        "instagram": (config.INSTAGRAM_ACCESS_TOKEN or config.APIFY_API_TOKEN, "collectors.instagram", "InstagramCollector"),
         "tiktok": (True, "collectors.tiktok", "TikTokCollector"),     # TikTok tem fallback público
-        "linkedin": (config.LINKEDIN_ACCESS_TOKEN, "collectors.linkedin", "LinkedInCollector"),
+        "linkedin": (config.LINKEDIN_ACCESS_TOKEN or config.APIFY_API_TOKEN, "collectors.linkedin", "LinkedInCollector"),
     }
 
     for name, (credential, module_path, class_name) in platforms.items():
